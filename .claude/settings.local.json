@@ -26,7 +26,17 @@
       "Bash(git --version)",
       "Bash(gh --version)",
       "Bash(gh auth *)",
-      "Bash(git -C /Users/jezieloliveira/RT360 rev-parse --is-inside-work-tree)"
+      "Bash(git -C /Users/jezieloliveira/RT360 rev-parse --is-inside-work-tree)",
+      "Bash(security find-internet-password *)",
+      "Bash(gh repo *)",
+      "Bash(PORT=3370 node dist/main.js)",
+      "Bash(/usr/bin/curl -s http://localhost:3370/api/health)",
+      "Bash(/usr/bin/curl -s -o /dev/null -w \"HTTP %{http_code}\\\\n\" http://localhost:3370/)",
+      "Bash(/usr/bin/curl -s -X POST http://localhost:3370/api/simulations/preview -H 'Content-Type: application/json' -d '{\"regime\":\"LP\",\"receita\":1000000,\"tributos\":200000,\"csp\":50000,\"adm\":30000,\"irpj\":80000,\"cbs\":10,\"ibs\":18,\"aliqSN\":11.67,\"pctRegular\":60,\"pctSN\":40,\"margemDesejada\":30}' -o /dev/null -w \"HTTP %{http_code}\\\\n\")",
+      "Bash(kill %1)",
+      "Bash(git add *)",
+      "Bash(git -c user.name=JezieldOliveira -c user.email=dev@rt360.local commit -q -m 'Corrige deploy na Vercel: função serverless NestJS unificada *)",
+      "Bash(git push *)"
     ]
   }
 }

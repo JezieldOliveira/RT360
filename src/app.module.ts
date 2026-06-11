@@ -5,18 +5,17 @@ import { HealthController } from './health.controller';
 import { PrismaModule } from './prisma/prisma.module';
 import { SimulationsModule } from './simulations/simulations.module';
 
-// Na Vercel o conteúdo de public/ é servido pela CDN; o ServeStatic só é usado localmente
-const staticImports = process.env.VERCEL
-  ? []
-  : [
-      ServeStaticModule.forRoot({
-        rootPath: join(__dirname, '..', 'public'),
-        exclude: ['/api/{*splat}'],
-      }),
-    ];
-
+// O Nest serve tanto a API (prefixo /api) quanto o frontend estático em public/.
+// process.cwd() é a raiz do projeto tanto localmente quanto na função serverless da Vercel.
 @Module({
-  imports: [...staticImports, PrismaModule, SimulationsModule],
+  imports: [
+    ServeStaticModule.forRoot({
+      rootPath: join(process.cwd(), 'public'),
+      exclude: ['/api/{*splat}'],
+    }),
+    PrismaModule,
+    SimulationsModule,
+  ],
   controllers: [HealthController],
 })
 export class AppModule {}
