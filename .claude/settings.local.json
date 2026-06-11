@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sL \"https://api.anthropic.com/v1/design/h/I32Ez5fn48HwJbaMb1l5cg\" -o /tmp/design_rt360.json -w \"%{http_code} %{content_type}\\\\n\")",
+      "Read(//tmp/**)",
+      "WebFetch(domain:api.anthropic.com)",
+      "Bash(ls -la /Users/jezieloliveira/RT360/ 2>/dev/null; find /Users/jezieloliveira/RT360 -iname \"*simulador*\" -o -iname \"*.dc.html\" 2>/dev/null | head -20; ls /Users/jezieloliveira/Downloads/*.html 2>/dev/null | head; find /Users/jezieloliveira/Downloads -iname \"*simulador*\" 2>/dev/null | head)",
+      "Bash(npm install *)",
+      "Bash(command -v brew)",
+      "Read(//opt/homebrew/opt/**)",
+      "Bash(brew install *)",
+      "Bash(npm -v)",
+      "Bash(npm approve-scripts *)",
+      "Bash(npx prisma *)",
+      "Bash(npm run *)",
+      "Bash(PORT=3360 node dist/main.js)",
+      "Bash(/usr/bin/curl -s http://localhost:3360/api/health)",
+      "Bash(/usr/bin/curl -s -X POST http://localhost:3360/api/simulations -H 'Content-Type: application/json' -d '{ *)",
+      "Bash(node -e \"let s='';process.stdin.on\\('data',d=>s+=d\\).on\\('end',\\(\\)=>{const j=JSON.parse\\(s\\);console.log\\('melhor:',j.melhor\\);console.log\\('atual.lucro:',j.atual.lucro,'margem:',j.atual.margem.toFixed\\(4\\)\\);console.log\\('preco:',j.preco\\);console.log\\('varLucro:',j.varLucro.toFixed\\(4\\)\\);console.log\\('evolucao 2027:',j.evolucao[0]\\);console.log\\('evolucao 2033:',j.evolucao[6]\\);console.log\\('saved:',j.saved\\);}\\)\")",
+      "Bash(/usr/bin/curl -s -X POST http://localhost:3360/api/simulations -H 'Content-Type: application/json' -d '{\"regime\":\"XX\",\"receita\":-5}')",
+      "Bash(/usr/bin/curl -s http://localhost:3360/api/simulations)",
+      "Bash(/usr/bin/curl -s http://localhost:3360/)",
+      "Bash(/usr/bin/curl -s -o /dev/null -w \"%{http_code}\\\\n\" http://localhost:3360/)",
+      "mcp__Claude_Preview__preview_start",
+      "Bash(kill 51172)",
+      "Bash(git --version)",
+      "Bash(gh --version)",
+      "Bash(gh auth *)",
+      "Bash(git -C /Users/jezieloliveira/RT360 rev-parse --is-inside-work-tree)"
+    ]
+  }
+}

@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RT360 — Simulador de Regime Tributário</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #f5f3f9; font-family: 'IBM Plex Sans', -apple-system, sans-serif; color: #1a1f2e; -webkit-font-smoothing: antialiased; }
+  input:focus, select:focus { border-color: #7416f8 !important; box-shadow: 0 0 0 3px rgba(116,22,248,0.15); }
+  button { transition: background .15s, border-color .15s; }
+  [data-print-only] { display: none; }
+  @media print {
+    [data-print-hide] { display: none !important; }
+    [data-print-only] { display: block !important; }
+    html, body { background: #fff; }
+    [data-block] { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<header data-print-hide="true" style="position: sticky; top: 0; z-index: 50; background: #0d1320; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; height: 58px">
+  <div style="font-size: 21px; font-weight: 700; letter-spacing: -0.5px; color: #ffffff">RT<span style="color: #9b4fff">360</span></div>
+  <div style="font-size: 10px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase; color: #9b4fff; border: 1.5px solid #7416f8; border-radius: 4px; padding: 4px 10px">Reforma Tributária</div>
+</header>
+
+<div data-print-hide="true" style="background: #0d1320; padding: 30px 40px 34px; border-bottom: 3px solid #7416f8">
+  <div style="max-width: 1140px; margin: 0 auto">
+    <h1 style="margin: 0 0 8px; font-size: 30px; font-weight: 700; letter-spacing: -1px; color: #ffffff; line-height: 1.15">Simulador de Regime Tributário</h1>
+    <p style="margin: 0; color: rgba(255,255,255,0.55); font-size: 15px; max-width: 660px; line-height: 1.6">Compare LP/LR, Simples Nacional e SN Regime Regular sob a Reforma Tributária (CBS/IBS — LC 214/2025). Três etapas, prévia ao vivo e diagnóstico completo.</p>
+  </div>
+</div>
+
+<div style="max-width: 1140px; margin: 0 auto; padding: 24px 40px 80px">
+
+  <div data-print-only="true" style="padding: 0 0 16px; border-bottom: 3px solid #7416f8; margin-bottom: 20px">
+    <div style="font-size: 20px; font-weight: 700; color: #0d1320">RT360 — Diagnóstico de Regime Tributário</div>
+    <div style="font-size: 12px; color: #6b7280" id="printDate"></div>
+  </div>
+
+  <div data-print-hide="true" id="stepper" style="display: flex; background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 10px; overflow: hidden; margin-bottom: 24px; box-shadow: 0 1px 6px rgba(40,20,80,0.04)"></div>
+
+  <div id="app"></div>
+
+</div>
+
+<script>
+const API = '/api';
+
+const state = {
+  step: 1,
+  regime: 'LP',
+  receita: 31110794,
+  pctRegular: 60,
+  tributos: 7481792,
+  csp: 372465,
+  adm: 300736,
+  irpj: 3644940,
+  cbs: 10,
+  ibs: 18,
+  aliqSN: 11.67,
+  margemDesejada: 30,
+  preview: null,   // último resultado de /preview
+  result: null,    // resultado final salvo (/simulations)
+  saved: false,
+};
+
+/* ── Helpers de formatação ── */
+function fmt(n) {
+  if (n == null || isNaN(n)) return '—';
+  const v = Math.round(n);
+  return (v < 0 ? '−R$ ' : 'R$ ') + Math.abs(v).toLocaleString('pt-BR');
+}
+function pct(n) {
+  if (n == null || isNaN(n) || !isFinite(n)) return '—';
+  return (n * 100).toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) + '%';
+}
+function moneyInp(v) { return v ? v.toLocaleString('pt-BR') : ''; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])); }
+
+/* ── Payload para a API ── */
+function payload() {
+  return {
+    regime: state.regime,
+    receita: state.receita,
+    tributos: state.tributos,
+    csp: state.csp,
+    adm: state.adm,
+    irpj: state.irpj,
+    cbs: +state.cbs || 0,
+    ibs: +state.ibs || 0,
+    aliqSN: +state.aliqSN || 0,
+    pctRegular: +state.pctRegular || 0,
+    pctSN: Math.max(0, Math.min(100, 100 - (+state.pctRegular || 0))),
+    margemDesejada: +state.margemDesejada || 0,
+  };
+}
+
+/* ── Chamadas à API (backend NestJS faz todos os cálculos) ── */
+let previewTimer = null;
+function schedulePreview() {
+  clearTimeout(previewTimer);
+  previewTimer = setTimeout(fetchPreview, 200);
+}
+async function fetchPreview() {
+  try {
+    const r = await fetch(API + '/simulations/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload()),
+    });
+    if (!r.ok) return;
+    state.preview = await r.json();
+    updateLive();
+  } catch (_) { /* prévia é best-effort */ }
+}
+
+async function gerar() {
+  const btn = document.getElementById('btnGerar');
+  if (btn) { btn.disabled = true; btn.textContent = 'Calculando…'; }
+  try {
+    const r = await fetch(API + '/simulations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload()),
+    });
+    if (!r.ok) {
+      const e = await r.json().catch(() => ({}));
+      throw new Error(Array.isArray(e.message) ? e.message.join('\n') : (e.message || 'Erro ao gerar diagnóstico.'));
+    }
+    const data = await r.json();
+    state.result = data;
+    state.preview = data;
+    state.saved = !!data.saved;
+    state.step = 4;
+    render();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  } catch (e) {
+    alert(e.message || 'Não foi possível conectar ao servidor.');
+    if (btn) { btn.disabled = false; btn.textContent = 'Gerar diagnóstico →'; }
+  }
+}
+
+/* ── Handlers de input (atualizam estado + agendam prévia, sem re-render do form) ── */
+function setMoney(key, el) {
+  const d = el.value.replace(/\D/g, '');
+  state[key] = parseInt(d, 10) || 0;
+  el.value = moneyInp(state[key]);
+  if (key === 'pctRegular') {} // n/a
+  syncDerived();
+  schedulePreview();
+}
+function setNum(key, el) {
+  const v = parseFloat(el.value);
+  state[key] = isNaN(v) ? 0 : v;
+  syncDerived();
+  schedulePreview();
+}
+function setRegime(el) { state.regime = el.value; schedulePreview(); }
+
+// Atualiza campos derivados exibidos imediatamente (sem esperar a API)
+function syncDerived() {
+  const snEl = document.getElementById('pctSNCalc');
+  if (snEl) snEl.value = String(Math.max(0, Math.min(100, 100 - (+state.pctRegular || 0))));
+}
+
+/* ── Atualiza a prévia ao vivo (rail + resumo da etapa 2) a partir de state.preview ── */
+function updateLive() {
+  const c = state.preview;
+  if (!c) return;
+  const up = c.varLucro >= 0;
+  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+
+  set('lv-receita', fmt(c.atual.receita));
+  set('lv-lucroAt', fmt(c.atual.lucro));
+  set('lv-margAt', pct(c.atual.margem));
+  set('lv-cargaAt', pct(c.atual.carga));
+  set('lv-melhorNome', c.melhor.nome);
+
+  const ecoEl = document.getElementById('lv-economia');
+  if (ecoEl) {
+    ecoEl.textContent = (c.economia >= 0 ? '+ ' : '− ') + fmt(Math.abs(c.economia)).replace('R$ ', 'R$ ');
+    ecoEl.style.color = up ? '#15803d' : '#b91c1c';
+  }
+
+  // Resumo da etapa 2
+  set('s2-lucroAt', fmt(c.atual.lucro));
+  set('s2-margAt', pct(c.atual.margem));
+  set('s2-cargaAt', pct(c.atual.carga));
+}
+
+/* ── STEPPER ── */
+function renderStepper() {
+  const labels = ['Empresa & Receita', 'DRE atual', 'Parâmetros', 'Diagnóstico'];
+  document.getElementById('stepper').innerHTML = labels.map((label, i) => {
+    const n = i + 1;
+    const current = state.step === n;
+    const done = state.step > n;
+    const wrap = `flex: 1 1 0; display: flex; align-items: center; gap: 10px; padding: 14px 16px; cursor: pointer; background: ${current ? '#faf9fc' : '#ffffff'}; border-bottom: 3px solid ${current ? '#7416f8' : 'transparent'}; ${i < 3 ? 'border-right: 1px solid #e8e4f0;' : ''} min-width: 0`;
+    const circle = `width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; background: ${done ? '#7416f8' : (current ? '#0d1320' : '#eceaf2')}; color: ${(done || current) ? '#ffffff' : '#8a8499'}`;
+    const lbl = `font-size: 13px; font-weight: ${current ? 700 : 600}; color: ${current ? '#0d1320' : (done ? '#7416f8' : '#8a8499')}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis`;
+    return `<div onclick="goStep(${n})" style="${wrap}"><span style="${circle}">${done ? '✓' : n}</span><span style="${lbl}">${label}</span></div>`;
+  }).join('');
+}
+
+function goStep(n) {
+  // só permite navegar para etapas já alcançadas ou a próxima imediata
+  state.step = n;
+  render();
+}
+
+/* ── Estilos reutilizados de campos ── */
+const inputStyle = 'flex: 1; min-width: 0; padding: 12px 14px; border: 2px solid #b9b2c9; font-size: 16px; font-family: inherit; color: #1a1f2e; background: #ffffff; outline: none; font-variant-numeric: tabular-nums';
+const affixStyle = 'display: flex; align-items: center; padding: 0 14px; background: #f3f0f8; border: 2px solid #b9b2c9; font-size: 15px; font-weight: 600; color: #554d66';
+const labelStyle = 'display: block; font-size: 14px; font-weight: 600; color: #1a1f2e; margin-bottom: 8px';
+const hintStyle = 'font-size: 13px; color: #6b7280; margin-bottom: 8px';
+
+function moneyField(key, label, hint, maxw) {
+  return `
+    <label style="${labelStyle}; margin-bottom: ${hint ? '4px' : '8px'}">${label}</label>
+    ${hint ? `<div style="${hintStyle}">${hint}</div>` : ''}
+    <div style="display: flex; align-items: stretch; max-width: ${maxw || 340}px">
+      <span style="${affixStyle}; border-right: none; border-radius: 6px 0 0 6px">R$</span>
+      <input value="${moneyInp(state[key])}" oninput="setMoney('${key}', this)" inputmode="numeric" style="${inputStyle}; border-radius: 0 6px 6px 0">
+    </div>`;
+}
+function pctField(key, label, hint, attrs) {
+  return `
+    <label style="${labelStyle}; margin-bottom: 4px">${label}</label>
+    <div style="${hintStyle}">${hint}</div>
+    <div style="display: flex; align-items: stretch; max-width: 200px">
+      <input value="${state[key]}" oninput="setNum('${key}', this)" type="number" ${attrs} style="${inputStyle}; border-radius: 6px 0 0 6px">
+      <span style="${affixStyle}; border-left: none; border-radius: 0 6px 6px 0">%</span>
+    </div>`;
+}
+
+/* ── ETAPAS DO WIZARD ── */
+function stepForm() {
+  if (state.step === 1) {
+    return `
+      <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: #7416f8; margin-bottom: 6px">Etapa 1 de 3</div>
+      <h2 style="margin: 0 0 4px; font-size: 22px; font-weight: 700; color: #0d1320; letter-spacing: -0.5px">Empresa e receita</h2>
+      <p style="margin: 0 0 28px; font-size: 14px; color: #6b7280">Identifique o regime atual e o perfil de clientes da empresa.</p>
+
+      <div style="margin-bottom: 22px">
+        <label style="${labelStyle}">Regime tributário atual</label>
+        <select onchange="setRegime(this)" style="width: 100%; max-width: 340px; padding: 12px 14px; border: 2px solid #b9b2c9; border-radius: 6px; font-size: 16px; font-family: inherit; color: #1a1f2e; background: #ffffff; outline: none">
+          <option value="LP" ${state.regime === 'LP' ? 'selected' : ''}>Lucro Presumido</option>
+          <option value="LR" ${state.regime === 'LR' ? 'selected' : ''}>Lucro Real</option>
+          <option value="SN" ${state.regime === 'SN' ? 'selected' : ''}>Simples Nacional</option>
+        </select>
+      </div>
+
+      <div style="margin-bottom: 22px">${moneyField('receita', 'Receita bruta anual', 'Faturamento dos últimos 12 meses')}</div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px">
+        <div style="flex: 1 1 220px">
+          ${pctField('pctRegular', 'Clientes no regime regular', 'LP, LR e demais que aproveitam crédito CBS/IBS', 'min="0" max="100" step="5"')}
+        </div>
+        <div style="flex: 1 1 220px">
+          <label style="${labelStyle}; margin-bottom: 4px">Clientes no Simples</label>
+          <div style="${hintStyle}">Calculado automaticamente</div>
+          <div style="display: flex; align-items: stretch; max-width: 200px">
+            <input id="pctSNCalc" value="${Math.max(0, Math.min(100, 100 - (+state.pctRegular || 0)))}" readonly style="flex: 1; min-width: 0; padding: 12px 14px; border: 2px solid #e3dfec; border-radius: 6px 0 0 6px; font-size: 16px; font-family: inherit; color: #6b7280; background: #f3f0f8; outline: none">
+            <span style="${affixStyle}; border-color: #e3dfec; border-left: none; border-radius: 0 6px 6px 0; color: #8a8499">%</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="display: flex; justify-content: flex-end; margin-top: 30px; padding-top: 22px; border-top: 1px solid #eee9f4">
+        <button type="button" onclick="goStep(2)" style="padding: 14px 32px; background: #7416f8; color: #ffffff; border: none; border-radius: 8px; font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer" onmouseover="this.style.background='#9b4fff'" onmouseout="this.style.background='#7416f8'">Continuar →</button>
+      </div>`;
+  }
+
+  if (state.step === 2) {
+    const c = state.preview;
+    return `
+      <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: #7416f8; margin-bottom: 6px">Etapa 2 de 3</div>
+      <h2 style="margin: 0 0 4px; font-size: 22px; font-weight: 700; color: #0d1320; letter-spacing: -0.5px">DRE atual</h2>
+      <p style="margin: 0 0 28px; font-size: 14px; color: #6b7280">Valores anuais da última apuração. O lucro e a margem atuais são calculados abaixo enquanto você preenche.</p>
+
+      <div style="margin-bottom: 22px">${moneyField('tributos', 'Tributos sobre receita atuais', 'PIS, COFINS, ISS/ICMS ou DAS — total anual')}</div>
+
+      <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 22px">
+        <div style="flex: 1 1 220px">${moneyField('csp', 'CSP / CMV', '', 280)}</div>
+        <div style="flex: 1 1 220px">${moneyField('adm', 'Despesas administrativas', '', 280)}</div>
+      </div>
+
+      <div style="margin-bottom: 22px">${moneyField('irpj', 'IRPJ / CSLL atual', '')}</div>
+
+      <div style="background: #f3f0f8; border-radius: 8px; padding: 16px 20px; display: flex; flex-wrap: wrap; gap: 28px">
+        <div><div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #6b7280; margin-bottom: 4px">Lucro líquido atual</div><div id="s2-lucroAt" style="font-size: 18px; font-weight: 700; color: #0d1320; font-variant-numeric: tabular-nums">${c ? fmt(c.atual.lucro) : '—'}</div></div>
+        <div><div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #6b7280; margin-bottom: 4px">Margem atual</div><div id="s2-margAt" style="font-size: 18px; font-weight: 700; color: #0d1320; font-variant-numeric: tabular-nums">${c ? pct(c.atual.margem) : '—'}</div></div>
+        <div><div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: #6b7280; margin-bottom: 4px">Carga tributária atual</div><div id="s2-cargaAt" style="font-size: 18px; font-weight: 700; color: #0d1320; font-variant-numeric: tabular-nums">${c ? pct(c.atual.carga) : '—'}</div></div>
+      </div>
+
+      <div style="display: flex; justify-content: space-between; gap: 12px; margin-top: 30px; padding-top: 22px; border-top: 1px solid #eee9f4">
+        <button type="button" onclick="goStep(1)" style="padding: 14px 24px; background: #ffffff; color: #1a1f2e; border: 2px solid #d8d2e4; border-radius: 8px; font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer" onmouseover="this.style.borderColor='#b9b2c9'" onmouseout="this.style.borderColor='#d8d2e4'">← Voltar</button>
+        <button type="button" onclick="goStep(3)" style="padding: 14px 32px; background: #7416f8; color: #ffffff; border: none; border-radius: 8px; font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer" onmouseover="this.style.background='#9b4fff'" onmouseout="this.style.background='#7416f8'">Continuar →</button>
+      </div>`;
+  }
+
+  // step 3
+  return `
+    <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.6px; text-transform: uppercase; color: #7416f8; margin-bottom: 6px">Etapa 3 de 3</div>
+    <h2 style="margin: 0 0 4px; font-size: 22px; font-weight: 700; color: #0d1320; letter-spacing: -0.5px">Parâmetros CBS / IBS</h2>
+    <p style="margin: 0 0 28px; font-size: 14px; color: #6b7280">Alíquotas da simulação e meta de margem. Os valores padrão seguem o cronograma da LC 214/2025.</p>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 22px">
+      <div style="flex: 1 1 220px">${pctNoHint('cbs', 'CBS', 'min="0" max="30" step="0.5"')}</div>
+      <div style="flex: 1 1 220px">${pctNoHint('ibs', 'IBS pleno em 2033', 'min="0" max="30" step="0.5"')}</div>
+    </div>
+
+    <div style="display: flex; flex-wrap: wrap; gap: 16px">
+      <div style="flex: 1 1 220px">${pctField('aliqSN', 'Alíquota SN / DAS', 'Alíquota efetiva atual do Simples', 'min="0" max="30" step="0.1"')}</div>
+      <div style="flex: 1 1 220px">${pctField('margemDesejada', 'Margem desejada', 'Meta para a estratégia de preços', 'min="0" max="95" step="5"')}</div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; gap: 12px; margin-top: 30px; padding-top: 22px; border-top: 1px solid #eee9f4">
+      <button type="button" onclick="goStep(2)" style="padding: 14px 24px; background: #ffffff; color: #1a1f2e; border: 2px solid #d8d2e4; border-radius: 8px; font-family: inherit; font-size: 15px; font-weight: 600; cursor: pointer" onmouseover="this.style.borderColor='#b9b2c9'" onmouseout="this.style.borderColor='#d8d2e4'">← Voltar</button>
+      <button type="button" id="btnGerar" onclick="gerar()" style="padding: 14px 32px; background: #7416f8; color: #ffffff; border: none; border-radius: 8px; font-family: inherit; font-size: 15px; font-weight: 700; cursor: pointer; display: inline-flex; align-items: center; gap: 8px" onmouseover="this.style.background='#9b4fff'" onmouseout="this.style.background='#7416f8'">Gerar diagnóstico →</button>
+    </div>`;
+}
+
+function pctNoHint(key, label, attrs) {
+  return `
+    <label style="${labelStyle}">${label}</label>
+    <div style="display: flex; align-items: stretch; max-width: 200px">
+      <input value="${state[key]}" oninput="setNum('${key}', this)" type="number" ${attrs} style="${inputStyle}; border-radius: 6px 0 0 6px">
+      <span style="${affixStyle}; border-left: none; border-radius: 0 6px 6px 0">%</span>
+    </div>`;
+}
+
+/* ── PRÉVIA AO VIVO (rail) ── */
+function liveRail() {
+  const c = state.preview;
+  return `
+    <aside data-print-hide="true" style="flex: 1 1 280px; min-width: 0; position: sticky; top: 78px; background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(40,20,80,0.05)">
+      <div style="background: #0d1320; padding: 14px 20px">
+        <div style="font-size: 14px; font-weight: 700; color: #ffffff">Prévia ao vivo</div>
+        <div style="font-size: 12px; color: rgba(255,255,255,0.45)">Atualiza conforme você preenche</div>
+      </div>
+      <div style="padding: 18px 20px; display: flex; flex-direction: column; gap: 12px">
+        ${railRow('Receita bruta', 'lv-receita', c ? fmt(c.atual.receita) : '—')}
+        ${railRow('Lucro líquido atual', 'lv-lucroAt', c ? fmt(c.atual.lucro) : '—')}
+        ${railRow('Margem atual', 'lv-margAt', c ? pct(c.atual.margem) : '—')}
+        ${railRow('Carga tributária atual', 'lv-cargaAt', c ? pct(c.atual.carga) : '—')}
+        <div style="height: 1px; background: #eee9f4; margin: 4px 0"></div>
+        <div style="font-size: 11px; font-weight: 700; letter-spacing: 1.4px; text-transform: uppercase; color: #7416f8">Prévia do diagnóstico 2033</div>
+        <div><span id="lv-melhorNome" style="display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 700; background: rgba(116,22,248,0.1); color: #7416f8">${c ? esc(c.melhor.nome) : '—'}</span></div>
+        <div>
+          <div id="lv-economia" style="font-size: 22px; font-weight: 700; letter-spacing: -0.5px; font-variant-numeric: tabular-nums; color: ${c && c.varLucro >= 0 ? '#15803d' : '#b91c1c'}">${c ? ((c.economia >= 0 ? '+ ' : '− ') + fmt(Math.abs(c.economia))) : '—'}</div>
+          <div style="font-size: 12px; color: #6b7280; line-height: 1.5; margin-top: 4px">impacto anual no lucro vs hoje — conclua as etapas para o relatório completo</div>
+        </div>
+      </div>
+    </aside>`;
+}
+function railRow(label, id, val) {
+  return `<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px"><span style="font-size: 13px; color: #6b7280">${label}</span><span id="${id}" style="font-size: 13px; font-weight: 600; color: #1a1f2e; font-variant-numeric: tabular-nums">${val}</span></div>`;
+}
+
+/* ── RESULTADOS / DIAGNÓSTICO ── */
+function resultsView() {
+  const c = state.result;
+  if (!c) return '';
+  const up = c.varLucro >= 0;
+  const economiaFmt = (c.economia >= 0 ? '+ ' : '− ') + fmt(Math.abs(c.economia));
+  const precoMsg = c.preco.variacao > 0
+    ? 'Um reajuste médio de ' + pct(c.preco.variacao) + ' nos preços preserva a margem desejada de ' + Math.round(c.diagnostico.margemDesejada * 100) + '%.'
+    : 'Nenhum reajuste de preço é necessário para atingir a margem alvo de ' + Math.round(c.diagnostico.margemDesejada * 100) + '%.';
+
+  const keyMap = { lp: [1, 4], snPadrao: [2, 5], snRegular: [3, 6] };
+  const hlIdx = keyMap[c.melhor.key];
+
+  // Tabela
+  const lp = c.comparativo.lp.porAno, sp = c.comparativo.snPadrao.porAno, sr = c.comparativo.snRegular.porAno;
+  const thBase = 'padding: 12px 14px; font-size: 12px; font-weight: 600; text-align: right; white-space: nowrap; color: #ffffff; line-height: 1.35';
+  const thCols = ['<th style="' + thBase + '; text-align: left; background: #0d1320">Linha<br><span style="font-weight: 400; font-size: 10px; opacity: 0.75"></span></th>'];
+  ['LP / LR', 'SN Padrão', 'SN Regular', 'LP / LR', 'SN Padrão', 'SN Regular'].forEach((l, i) => {
+    const hl = hlIdx.includes(i + 1);
+    const sub = (i < 3 ? '2027' : '2033') + (hl ? ' ★' : '');
+    thCols.push(`<th style="${thBase}; background: ${hl ? '#7416f8' : '#0d1320'}">${l}<br><span style="font-weight: 400; font-size: 10px; opacity: 0.75">${sub}</span></th>`);
+  });
+
+  const same6 = v => [v, v, v, v, v, v];
+  function mkRow(label, vals, type) {
+    const cells = [label].concat(vals).map((v, i) => {
+      let st = `padding: 11px 14px; text-align: ${i === 0 ? 'left' : 'right'}; font-size: 13px; font-variant-numeric: tabular-nums; border-bottom: 1px solid #f0edf6; color: ${i === 0 ? '#6b7280' : '#1a1f2e'}; font-weight: 400; white-space: nowrap`;
+      if (hlIdx.includes(i)) st += '; background: rgba(116,22,248,0.06); font-weight: 600';
+      if (type === 'total') st += `; background: ${hlIdx.includes(i) ? '#2a1454' : '#0d1320'}; color: #ffffff; font-weight: 700`;
+      if (type === 'subtotal') st += `; background: ${hlIdx.includes(i) ? 'rgba(116,22,248,0.12)' : '#f3f0f8'}; font-weight: 600; color: #1a1f2e`;
+      return `<td style="${st}">${v}</td>`;
+    });
+    return '<tr>' + cells.join('') + '</tr>';
+  }
+  const rowsHtml = [
+    mkRow('(+) Receita bruta', same6(fmt(c.atual.receita))),
+    mkRow('(−) Tributos totais', [lp[0].trib, sp[0].trib, sr[0].trib, lp[6].trib, sp[6].trib, sr[6].trib].map(fmt)),
+    mkRow('(−) CSP + Despesas ADM', same6(fmt(c.inputs.csp + c.inputs.adm))),
+    mkRow('(=) Lucro líquido', [lp[0].liq, sp[0].liq, sr[0].liq, lp[6].liq, sp[6].liq, sr[6].liq].map(fmt), 'total'),
+    mkRow('Margem líquida', [lp[0].marg, sp[0].marg, sr[0].marg, lp[6].marg, sp[6].marg, sr[6].marg].map(pct), 'subtotal'),
+  ].join('');
+
+  // Barras
+  const maxT = c.atual.receita * 0.5 || 1;
+  const barsHtml = c.evolucao.map(y => {
+    const pT = Math.min(Math.max(y.trib / maxT * 100, 0), 100);
+    const pL = Math.min(Math.max(c.atual.receita ? y.liq / c.atual.receita * 100 : 0, 0), 100);
+    const bar = (lbl, val, w, bg) => `
+      <div style="display: flex; align-items: center; gap: 12px">
+        <div style="width: 100px; flex-shrink: 0; font-size: 12px; color: #6b7280; text-align: right">${lbl}</div>
+        <div style="flex: 1; min-width: 0; height: 22px; background: #f3f0f8; border-radius: 4px; overflow: hidden"><div style="height: 100%; width: ${w.toFixed(1)}%; background: ${bg}; border-radius: 4px"></div></div>
+        <div style="width: 130px; flex-shrink: 0; font-size: 12px; font-weight: 600; color: #1a1f2e; font-variant-numeric: tabular-nums">${val}</div>
+      </div>`;
+    return `<div><div style="font-size: 12px; font-weight: 700; color: #6b7280; letter-spacing: 1px; margin-bottom: 8px">${y.ano}</div><div style="display: flex; flex-direction: column; gap: 6px">${bar('Tributos', fmt(y.trib), pT, '#0d1320')}${bar('Lucro líquido', fmt(y.liq), pL, '#7416f8')}</div></div>`;
+  }).join('');
+
+  // Diagnóstico
+  const regOk = c.diagnostico.creditoExigido;
+  const okPreco = c.preco.variacao <= 0.05;
+  const badge = (text, bg, color) => `<span style="display: inline-flex; align-items: center; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 700; background: ${bg}; color: ${color}; line-height: 1.4">${text}</span>`;
+  const plain = text => `<span style="font-size: 14px; font-weight: 600; color: #0d1320; line-height: 1.4">${text}</span>`;
+  const diag = [
+    ['Melhor regime em 2033', badge(esc(c.melhor.nome), 'rgba(116,22,248,0.1)', '#7416f8')],
+    ['Clientes no regime regular', badge(Math.round(c.diagnostico.pctRegular * 100) + '% — ' + (regOk ? 'crédito CBS/IBS exigido' : 'crédito não prioritário'), regOk ? '#dcfce7' : '#fee2e2', regOk ? '#15803d' : '#b91c1c')],
+    ['Impacto vs. hoje', badge((up ? '▲ ' : '▼ ') + pct(Math.abs(c.varLucro)) + ' no lucro', up ? '#dcfce7' : '#fee2e2', up ? '#15803d' : '#b91c1c')],
+    ['Ajuste de preço', badge((c.preco.variacao >= 0 ? '+' : '') + pct(c.preco.variacao) + ' para margem ' + Math.round(c.diagnostico.margemDesejada * 100) + '%', okPreco ? '#dcfce7' : '#fee2e2', okPreco ? '#15803d' : '#b91c1c')],
+    ['Carga tributária 2033', plain(pct(c.diagnostico.cargaTributaria2033) + ' da receita bruta')],
+    ['Ação prioritária', plain(esc(c.diagnostico.acaoPrioritaria))],
+  ];
+  const diagHtml = diag.map(([k, v]) => `<div style="padding: 16px 24px; border-bottom: 1px solid #f0edf6"><div style="font-size: 11px; font-weight: 600; letter-spacing: 0.8px; text-transform: uppercase; color: #6b7280; margin-bottom: 6px">${k}</div>${v}</div>`).join('');
+
+  const cardHead = (title, sub) => `<div style="padding: 16px 24px; border-bottom: 1px solid #eee9f4; display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px"><h3 style="margin: 0; font-size: 16px; font-weight: 700; color: #0d1320">${title}</h3><p style="margin: 0; font-size: 12px; color: #6b7280">${sub}</p></div>`;
+  const metric = (label, value, sub, accent) => `<div style="background: #ffffff; border: ${accent ? '2px solid #7416f8' : '1.5px solid #e3dfec'}; border-radius: 10px; padding: 18px 20px"><div style="font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: ${accent ? '#7416f8' : '#6b7280'}; margin-bottom: 8px">${label}</div><div style="font-size: 24px; font-weight: 700; letter-spacing: -0.5px; line-height: 1.1; font-variant-numeric: tabular-nums; color: ${accent ? (c.melhor.liq >= c.atual.lucro ? '#16a34a' : '#dc2626') : '#0d1320'}">${value}</div><div style="font-size: 12px; color: #6b7280; margin-top: 4px">${sub}</div></div>`;
+
+  return `
+    <div data-screen-label="Diagnóstico" style="display: flex; flex-direction: column; gap: 20px">
+
+      <div data-print-hide="true" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px">
+        <button type="button" onclick="goStep(1)" style="padding: 12px 22px; background: #ffffff; color: #1a1f2e; border: 2px solid #d8d2e4; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer" onmouseover="this.style.borderColor='#b9b2c9'" onmouseout="this.style.borderColor='#d8d2e4'">← Editar dados</button>
+        <button type="button" onclick="window.print()" style="padding: 12px 26px; background: #7416f8; color: #ffffff; border: none; border-radius: 8px; font-family: inherit; font-size: 14px; font-weight: 700; cursor: pointer" onmouseover="this.style.background='#9b4fff'" onmouseout="this.style.background='#7416f8'">Exportar PDF / Imprimir</button>
+      </div>
+
+      <div data-block="true" style="background: #0d1320; border-radius: 12px; padding: 32px; display: flex; flex-wrap: wrap; gap: 32px; align-items: center; justify-content: space-between">
+        <div style="flex: 1 1 380px; min-width: 0">
+          <div style="font-size: 11px; font-weight: 700; letter-spacing: 2px; text-transform: uppercase; color: #9b4fff; margin-bottom: 10px">Recomendação de regime — 2033</div>
+          <div style="font-size: 34px; font-weight: 700; letter-spacing: -1px; color: #ffffff; line-height: 1.1; margin-bottom: 12px">${esc(c.melhor.nome)}</div>
+          <div style="font-size: 14px; color: rgba(255,255,255,0.6); line-height: 1.7; max-width: 560px">Com <strong style="color: #9b4fff">${Math.round(c.diagnostico.pctRegular * 100)}%</strong> dos clientes no regime regular, este regime maximiza o resultado em 2033, gerando lucro de <strong style="color: #ffffff">${fmt(c.melhor.liq)}</strong> com margem de <strong style="color: #ffffff">${pct(c.melhor.marg)}</strong>. ${precoMsg}</div>
+        </div>
+        <div style="flex: 0 1 auto; text-align: right">
+          <div style="font-size: 11px; font-weight: 600; letter-spacing: 1.5px; text-transform: uppercase; color: rgba(255,255,255,0.45); margin-bottom: 8px">Impacto anual vs hoje</div>
+          <div style="font-size: 38px; font-weight: 700; line-height: 1.1; letter-spacing: -1.5px; font-variant-numeric: tabular-nums; color: ${up ? '#4ade80' : '#f87171'}">${economiaFmt}</div>
+          <div style="font-size: 13px; color: rgba(255,255,255,0.5); margin-top: 6px">${(up ? '▲ ' : '▼ ') + pct(Math.abs(c.varLucro))} no lucro líquido</div>
+        </div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px">
+        ${metric('Lucro líquido atual', fmt(c.atual.lucro), 'Margem: ' + pct(c.atual.margem))}
+        ${metric('Lucro 2033 — recomendado', fmt(c.melhor.liq), 'Margem: ' + pct(c.melhor.marg), true)}
+        ${metric('Carga tributária 2033', pct(c.diagnostico.cargaTributaria2033), 'da receita bruta')}
+        ${metric('Preço sugerido — margem ' + Math.round(c.diagnostico.margemDesejada * 100) + '%', fmt(c.preco.sugerido), 'Variação: ' + (c.preco.variacao >= 0 ? '+' : '') + pct(c.preco.variacao))}
+      </div>
+
+      <div data-block="true" style="background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 12px; overflow: hidden">
+        ${cardHead('Comparativo de regimes', 'Início da transição (2027) vs regime pleno (2033) — ★ regime recomendado')}
+        <div style="overflow-x: auto"><table style="width: 100%; border-collapse: collapse"><thead><tr>${thCols.join('')}</tr></thead><tbody>${rowsHtml}</tbody></table></div>
+      </div>
+
+      <div data-block="true" style="background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 12px; overflow: hidden">
+        ${cardHead('Evolução 2027–2033', 'Tributos vs lucro líquido no regime recomendado — ' + esc(c.melhor.nome))}
+        <div style="padding: 24px; display: flex; flex-direction: column; gap: 18px">${barsHtml}</div>
+      </div>
+
+      <div data-block="true" style="background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 12px; overflow: hidden">
+        ${cardHead('Diagnóstico estratégico', 'Checklist da Reforma Tributária')}
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr))">${diagHtml}</div>
+      </div>
+
+      <div style="background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 10px; padding: 16px 20px; font-size: 12px; color: #6b7280; line-height: 1.7">
+        <strong style="color: #1a1f2e">Metodologia:</strong> Simulação baseada nas alíquotas e cronograma da Reforma Tributária (LC 214/2025). IBS: 0,1% em 2027–2028 → 1,8% em 2029 → 3,6% em 2030 → 5,4% em 2031 → 7,2% em 2032 → alíquota plena em 2033. Créditos estimados com base na composição de fornecedores. Recomenda-se validação com contador responsável antes de qualquer alteração de regime.${state.saved ? ' <strong style="color:#15803d">✓ Simulação salva no histórico.</strong>' : ''}
+      </div>
+    </div>`;
+}
+
+/* ── RENDER PRINCIPAL ── */
+function render() {
+  renderStepper();
+  const app = document.getElementById('app');
+
+  if (state.step === 4) {
+    document.getElementById('stepper').style.display = 'flex';
+    app.innerHTML = resultsView();
+    return;
+  }
+
+  app.innerHTML = `
+    <div style="display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start">
+      <div style="flex: 2 1 480px; min-width: 0; background: #ffffff; border: 1.5px solid #e3dfec; border-radius: 12px; padding: 32px; box-shadow: 0 2px 12px rgba(40,20,80,0.05)">
+        ${stepForm()}
+      </div>
+      ${liveRail()}
+    </div>`;
+  updateLive();
+}
+
+document.getElementById('printDate').textContent = 'Gerado em ' + new Date().toLocaleDateString('pt-BR') + ' · Simulação conforme LC 214/2025';
+render();
+fetchPreview();
+</script>
+</body>
+</html>

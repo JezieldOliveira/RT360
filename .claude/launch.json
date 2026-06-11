@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "rt360",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["dist/main.js"],
+      "port": 3360,
+      "env": { "PORT": "3360" }
+    }
+  ]
+}
